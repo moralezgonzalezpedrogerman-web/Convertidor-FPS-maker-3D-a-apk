@@ -1,36 +1,90 @@
-# This is a basic workflow to help you get started with Actions
-
-name: CI
-
-# Controls when the workflow will run
+name: Generar APK
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      paquete:
+        description: "Nombre del paquete .zip (ej. paquete-mi-juego.zip). Vacío = el más reciente"
+        required: false
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+permissions:
+  contents: write
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  apk:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Elegir paquete
+        id: pkg
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          P="${{ github.event.inputs.paquete }}"
+          if [ -z "$P" ]; then
+            P=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -E '^paquete-.*\.zip$' | head -1 || true)
+          fi
+          if [ -z "$P" ]; then
+            P=$(ls -t paquete-*.zip 2>/dev/null | head -1 || true)
+          fi
+          if [ -z "$P" ] || [ ! -f "$P" ]; then
+            echo "No hay ningún paquete-*.zip en el repositorio: no hay nada que compilar."
+            echo "paquete=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Paquete elegido: $P"
+            echo "paquete=$P" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comprobar herramienta
+        if: steps.pkg.outputs.paquete != ''
+        run: |
+          test -f herramienta.zip || { echo "Falta herramienta.zip en el repositorio"; exit 1; }
+
+      - uses: actions/setup-java@v4
+        if: steps.pkg.outputs.paquete != ''
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        if: steps.pkg.outputs.paquete != ''
+        with:
+          python-version: "3.12"
+
+      - name: Preparar proyecto de Android
+        if: steps.pkg.outputs.paquete != ''
+        run: |
+          pip install pillow
+          unzip -q herramienta.zip -d tool
+          python3 tool/tools/prepare.py "${{ steps.pkg.outputs.paquete }}"
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.pkg.outputs.paquete != ''
+        with:
+          gradle-version: "8.7"
+
+      - name: Compilar APK
+        if: steps.pkg.outputs.paquete != ''
+        run: gradle -p tool/android assembleDebug --no-daemon
+
+      - name: Nombrar APK
+        if: steps.pkg.outputs.paquete != ''
+        run: |
+          mkdir -p salida
+          cp tool/android/app/build/outputs/apk/debug/app-debug.apk "salida/$(cat tool/apkname.txt).apk"
+          ls -la salida
+
+      - uses: actions/upload-artifact@v4
+        if: steps.pkg.outputs.paquete != ''
+        with:
+          name: apk
+          path: salida/*.apk
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.pkg.outputs.paquete != ''
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: APK ${{ github.run_number }}
+          files: salida/*.apk
+          
