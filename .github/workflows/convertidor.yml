@@ -1,0 +1,86 @@
+name: Construir Convertidor
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  construir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Comprobar que está convertidor.zip
+        run: |
+          if [ ! -f convertidor.zip ]; then
+            echo "::error::Falta el archivo convertidor.zip en la raíz del repositorio. Súbelo con Add file > Upload files (sin abrirlo)."
+            exit 1
+          fi
+          unzip -q convertidor.zip -d src
+          test -f src/android/settings.gradle || { echo "::error::convertidor.zip no tiene la carpeta android/ en su raíz"; exit 1; }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: 1. Compilar la plantilla del reproductor
+        run: gradle -p src/android :template:assembleDebug --no-daemon --stacktrace
+
+      - name: 2. Comprobar la plantilla (textos de relleno)
+        run: |
+          python3 - <<'PY'
+          import zipfile, sys
+          z = zipfile.ZipFile("src/android/template/build/outputs/apk/debug/template-debug.apk")
+          m = z.read("AndroidManifest.xml")
+          pkg = "com.catro.appXXXXXXXXXXXX"
+          lbl = "LBLPLACEHOLDER" + "_" * 34
+          def esta(t): return t.encode("utf-16le") in m or t.encode("utf-8") in m
+          print("identificador de relleno en el manifiesto:", esta(pkg))
+          print("nombre de relleno en el manifiesto:", esta(lbl))
+          iconos = [n for n in z.namelist() if "ic_launcher" in n]
+          print("iconos encontrados:", len(iconos), iconos[:3])
+          if not (esta(pkg) and esta(lbl)):
+              print("::error::La plantilla compilada no conserva los textos de relleno; el Convertidor no podría cambiar nombre e identificador.")
+              sys.exit(1)
+          if not iconos:
+              print("::error::La plantilla no tiene iconos ic_launcher")
+              sys.exit(1)
+          PY
+
+      - name: 3. Preparar plantilla y llave dentro del Convertidor
+        run: |
+          D=src/android/converter/src/main/assets
+          mkdir -p "$D"
+          cp src/android/template/build/outputs/apk/debug/template-debug.apk "$D/template.apk"
+          keytool -genkeypair -keystore "$D/llave.p12" -storetype PKCS12 \
+            -storepass generador -keypass generador -alias llave \
+            -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Generador de juegos"
+          ls -la "$D"
+
+      - name: 4. Compilar el Convertidor
+        run: gradle -p src/android :converter:assembleDebug --no-daemon --stacktrace
+
+      - name: Nombrar el APK
+        run: |
+          mkdir -p salida
+          cp src/android/converter/build/outputs/apk/debug/converter-debug.apk salida/Convertidor.apk
+          ls -la salida
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Convertidor
+          path: salida/Convertidor.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: convertidor-${{ github.run_number }}
+          name: Convertidor ${{ github.run_number }}
+          files: salida/Convertidor.apk
