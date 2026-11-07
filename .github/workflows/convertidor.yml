@@ -1,4 +1,4 @@
-name: Construir Convertidor
+name: Construir FPS Converter Maker 3D
 
 on:
   push:
@@ -71,16 +71,16 @@ jobs:
       - name: Nombrar el APK
         run: |
           mkdir -p salida
-          cp src/android/converter/build/outputs/apk/debug/converter-debug.apk salida/Convertidor.apk
+          cp src/android/converter/build/outputs/apk/debug/converter-debug.apk "salida/FPS Converter Maker 3D.apk"
           ls -la salida
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Convertidor
-          path: salida/Convertidor.apk
+          name: FPS-Converter-Maker-3D
+          path: salida/*.apk
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: convertidor-${{ github.run_number }}
-          name: Convertidor ${{ github.run_number }}
-          files: salida/Convertidor.apk
+          name: FPS Converter Maker 3D ${{ github.run_number }}
+          files: salida/*.apk
